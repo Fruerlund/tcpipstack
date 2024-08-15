@@ -1,0 +1,107 @@
+SETUP
+
+Level-IP uses a Linux TAP device to communicate to the outside world. In short, the tap device is initialized in the host Linux' networking stack, and `lvl-ip` can then read the L2 frames:
+
+    $ sudo mknod /dev/net/tap c 10 200
+    $ sudo chmod 0666 /dev/net/tap
+
+In essence, `lvl-ip` operates as a host inside the tap device's subnet. Therefore, in order to communicate with other hosts, the tap device needs to be set in a forwarding mode:
+
+An example from my (Arch) Linux machine, where `wlp2s0` is my outgoing interface, and `tap0` is the tap device for `lvl-ip`:
+
+    $ sysctl -w net.ipv4.ip_forward=1
+    $ iptables -I INPUT --source 10.0.0.0/24 -j ACCEPT
+    $ iptables -t nat -I POSTROUTING --out-interface eth0 -j MASQUERADE
+    $ iptables -I FORWARD --in-interface eth0 --out-interface tap0 -j ACCEPT
+    $ iptables -I FORWARD --in-interface tap0 --out-interface eth0 -j ACCEPT
+
+
+
+TOPOLOGY:
+   localhost                        outside network
+   kernel stack                 usermode stack [ main ]
+       |                            (10.0.0.5)
+       |                    (write) |       /|\ (read)
+       |                            |        |
+       |                           \|/       |
+     tap0       <-------->         /dev/net/tap0
+  (10.0.0.1)    
+
+ip link
+11: tap0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UNKNOWN group default qlen 1000
+    link/ether b2:e7:9a:28:cf:26 brd ff:ff:ff:ff:ff:ff
+    inet 10.0.0.1/32 scope global tap0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::b0e7:9aff:fe28:cf26/64 scope link 
+       valid_lft forever preferred_lft forever
+
+ip route
+10.0.0.0/24 dev tap0 scope link 
+
+ARP:
+arp -a
+? (10.0.0.5) at 00:15:5d:ba:14:4c [ether] on tap0
+
+arping 10.0.0.5 -i tap0
+│58 bytes from 00:15:5d:ba:14:4c (10.0.0.5): index=2 time=235.800 usec
+│58 bytes from 00:15:5d:ba:14:4c (10.0.0.5): index=2 time=235.800 usec
+│58 bytes from 00:15:5d:ba:14:4c (10.0.0.5): index=2 time=235.800 usec
+│58 bytes from 00:15:5d:ba:14:4c (10.0.0.5): index=2 time=235.800 usec
+
+
+
+
+
+
+
+
+
+
+
+TOPOLOGY:
++----------+
+| internet |
++----|-----+
++----|-----+
+|   eth0   |
++----|-----+
++----|-----+
+|  bridge  |
++----|-----+
++----|---------+
+|   tap0       |
+|--------------|
+| /dev/net/tun |
++--|----|---|--+
+  poll  |   |
+   |  read  |
+   |    |  write
++--|----|---|--+
+| my netstack  |
++--------------+
+
+#
+#             br0
+#            /   \
+#        eth0     tap0
+#         /         \
+#     network(gw)   /dev/net/tun
+#                     \
+#                    veth (./tapip)
+
+
+COMMANDS:
+#1. Create TAP interface.
+    tunctl -b -t tap0 > /dev/null
+
+#2. Create a bridge.
+    brctl addbr br0
+
+#3. Setup bridge.
+	brctl addif br0 eth0
+	brctl addif br0 tap0
+
+#4. Clear interfaces.
+	ifconfig eth0 0.0.0.0 up
+	ifconfig tap0 0.0.0.0 up
+	ifconfig br0 0.0.0.0 up
